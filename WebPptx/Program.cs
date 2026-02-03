@@ -18,6 +18,8 @@ builder.Services.AddSwaggerGen(options =>
 });
 
 builder.Services.AddScoped<IPptxRebuildService, PptxRebuildService>();
+builder.Services.AddScoped<IHtmlExportService, HtmlExportService>();
+builder.Services.AddScoped<IHtmlPageService, HtmlPageService>();
 
 var app = builder.Build();
 

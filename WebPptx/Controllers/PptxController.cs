@@ -133,6 +133,103 @@ public class PptxController : ControllerBase
         }
     }
 
+    [HttpPost("export-html")]
+    [ProducesResponseType(typeof(ExportHtmlResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ExportHtmlBatchResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+    public IActionResult ExportHtml([FromBody] ExportHtmlRequest request, [FromServices] IHtmlExportService htmlExportService)
+    {
+        if (request is null)
+        {
+            return BadRequest("Body is required.");
+        }
+
+        List<string> requestedPaths;
+        try
+        {
+            requestedPaths = GetRequestedHtmlPaths(request);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(ex.Message);
+        }
+
+        if (requestedPaths.Count == 0)
+        {
+            return BadRequest("Body must contain a non-empty 'path' or 'paths' value.");
+        }
+
+        if (requestedPaths.Count == 1)
+        {
+            try
+            {
+                var result = htmlExportService.Export(requestedPaths[0], request);
+                return Ok(result);
+            }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(ex.Message);
+            }
+            catch (FileNotFoundException ex)
+            {
+                return NotFound($"File not found: {ex.FileName ?? ex.Message}");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "HTML export failed for {Path}", requestedPaths[0]);
+                return Problem(title: "HTML export failed", detail: ex.Message, statusCode: StatusCodes.Status500InternalServerError);
+            }
+        }
+
+        var items = new List<ExportHtmlItemResult>();
+        foreach (var path in requestedPaths)
+        {
+            try
+            {
+                var result = htmlExportService.Export(path, request);
+                items.Add(new ExportHtmlItemResult(path, true, null, result));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "HTML export failed for {Path}", path);
+                items.Add(new ExportHtmlItemResult(path, false, ex.Message, null));
+            }
+        }
+
+        var succeeded = items.Count(item => item.Success);
+        var failed = items.Count - succeeded;
+        return Ok(new ExportHtmlBatchResponse(items.Count, succeeded, failed, items));
+    }
+
+    [HttpPost("htmlpage")]
+    [ProducesResponseType(typeof(HtmlPageResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+    public IActionResult HtmlPage([FromBody] HtmlPageRequest request, [FromServices] IHtmlPageService htmlPageService)
+    {
+        try
+        {
+            var result = htmlPageService.Export(request);
+            return Ok(result);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(ex.Message);
+        }
+        catch (FileNotFoundException ex)
+        {
+            return NotFound($"File not found: {ex.FileName ?? ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "HTML page export failed.");
+            return Problem(title: "HTML page export failed", detail: ex.Message, statusCode: StatusCodes.Status500InternalServerError);
+        }
+    }
+
     private static List<string> GetRequestedPaths(ExtractPptxRequest request)
     {
         var paths = new List<string>();
@@ -262,6 +359,31 @@ public class PptxController : ControllerBase
             screenshotFrameMaxWidth,
             screenshotFrameMaxHeight,
             screenshotFrameAllowUpscale);
+    }
+
+    private static List<string> GetRequestedHtmlPaths(ExportHtmlRequest request)
+    {
+        var paths = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(request.Path))
+        {
+            paths.Add(request.Path.Trim());
+        }
+
+        if (request.Paths is not null)
+        {
+            foreach (var path in request.Paths)
+            {
+                if (!string.IsNullOrWhiteSpace(path))
+                {
+                    paths.Add(path.Trim());
+                }
+            }
+        }
+
+        return paths
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private ExtractPptxResponse ExtractSingle(string inputPath, ExtractOptions options)
@@ -483,7 +605,7 @@ public class PptxController : ControllerBase
         return saved;
     }
 
-    private static SlideSizeInfo GetSlideSizeInfo(PresentationPart presentationPart)
+    internal static SlideSizeInfo GetSlideSizeInfo(PresentationPart presentationPart)
     {
         var slideSize = presentationPart.Presentation?.SlideSize;
         if (slideSize is null)
@@ -496,7 +618,7 @@ public class PptxController : ControllerBase
         return new SlideSizeInfo(width, height);
     }
 
-    private static Dictionary<int, List<SlideFrameRect>> ExtractSlideFrames(
+    internal static Dictionary<int, List<SlideFrameRect>> ExtractSlideFrames(
         PresentationPart presentationPart,
         List<SlideId> slideIds)
     {
@@ -629,7 +751,7 @@ public class PptxController : ControllerBase
         return saved;
     }
 
-    private static List<string> ExtractSlideScreenshotsViaPdf(
+    internal static List<string> ExtractSlideScreenshotsViaPdf(
         string pptxPath,
         string screenshotsDir,
         string sofficePath,
@@ -1300,7 +1422,7 @@ public class PptxController : ControllerBase
         return new Uri(normalized).AbsoluteUri;
     }
 
-    private static string? ResolveSofficePath(string? configuredPath)
+    internal static string? ResolveSofficePath(string? configuredPath)
     {
         if (!string.IsNullOrWhiteSpace(configuredPath))
         {
@@ -1377,6 +1499,54 @@ public record ExtractPptxItemResult(string InputPath, bool Success, string? Erro
 
 public record ExtractPptxBatchResponse(int RequestedCount, int SucceededCount, int FailedCount, List<ExtractPptxItemResult> Items);
 
+public record ExportHtmlRequest(
+    string? Path,
+    List<string>? Paths = null,
+    string? SofficePath = null,
+    int? MaxWidth = null,
+    int? MaxHeight = null,
+    int? JpegQuality = null,
+    int? PdfDpi = null,
+    int? FrameMaxWidth = null,
+    int? FrameMaxHeight = null,
+    bool? FrameAllowUpscale = null);
+
+public record ExportHtmlResponse(
+    string InputPath,
+    string OutputDirectory,
+    string HtmlPath,
+    int SlideCount,
+    int FrameCount,
+    List<string> FrameFiles);
+
+public record ExportHtmlItemResult(string InputPath, bool Success, string? Error, ExportHtmlResponse? Result);
+
+public record ExportHtmlBatchResponse(int RequestedCount, int SucceededCount, int FailedCount, List<ExportHtmlItemResult> Items);
+
+public record HtmlPageRequest(
+    string? Path,
+    string? SofficePath = null,
+    int? MaxWidth = null,
+    int? MaxHeight = null,
+    int? JpegQuality = null,
+    int? PdfDpi = null);
+
+public record HtmlPageResponse(
+    string InputPath,
+    string OutputDirectory,
+    string HtmlPath,
+    string PdfPath,
+    int PageCount,
+    int ImageCount,
+    List<string> PageImages);
+
+public record HtmlPageOptions(
+    string? SofficePath,
+    int? MaxWidth,
+    int? MaxHeight,
+    int JpegQuality,
+    int? PdfDpi);
+
 public record ExtractOptions(
     bool GenerateScreenshots,
     string? SofficePath,
@@ -1390,6 +1560,16 @@ public record ExtractOptions(
     int? ScreenshotFrameMaxWidth,
     int? ScreenshotFrameMaxHeight,
     bool ScreenshotFrameAllowUpscale);
+
+public record HtmlExportOptions(
+    string? SofficePath,
+    int? MaxWidth,
+    int? MaxHeight,
+    int JpegQuality,
+    int? PdfDpi,
+    int? FrameMaxWidth,
+    int? FrameMaxHeight,
+    bool FrameAllowUpscale);
 
 public readonly record struct SlideFrameRect(long X, long Y, long Cx, long Cy);
 
