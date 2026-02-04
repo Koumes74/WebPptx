@@ -1221,7 +1221,7 @@ public class HtmlPageService : IHtmlPageService
         {
             var slide = slides[i];
             var background = string.IsNullOrWhiteSpace(slide.BackgroundColor) ? "#ffffff" : slide.BackgroundColor;
-            var (backgroundImages, flowImages) = SplitImageLayers(slide.Images, slide.TextBlocks, slideSizeInfo);
+            var (backgroundImages, flowImages) = SplitImageLayers(slide.Images, slideSizeInfo);
             var contentHtml = InsertImagesIntoSegment(segments[i], flowImages, slideSizeInfo, outputDir, safeTitle);
             var backgroundHtml = BuildBackgroundImagesHtml(backgroundImages, outputDir, safeTitle);
             var minHeightPx = GetMaxBottomPx(backgroundImages);
@@ -1336,17 +1336,11 @@ public class HtmlPageService : IHtmlPageService
 
     private static (List<HtmlImageBlock> Background, List<HtmlImageBlock> Flow) SplitImageLayers(
         List<HtmlImageBlock> images,
-        List<HtmlTextBlock> textBlocks,
         SlideSizeInfo slideSizeInfo)
     {
         if (images.Count == 0)
         {
             return (new List<HtmlImageBlock>(), new List<HtmlImageBlock>());
-        }
-
-        if (textBlocks.Count == 0)
-        {
-            return (new List<HtmlImageBlock>(), images.ToList());
         }
 
         var background = new List<HtmlImageBlock>();
@@ -1358,13 +1352,13 @@ public class HtmlPageService : IHtmlPageService
 
         foreach (var image in images)
         {
-            var intersects = textBlocks.Any(text => RectanglesIntersect(image, text));
             var widthRatio = image.Cx / (double)slideWidth;
             var heightRatio = image.Cy / (double)slideHeight;
             var areaRatio = slideArea <= 0 ? 0 : (image.Cx * (double)image.Cy) / slideArea;
 
-            var isBackgroundCandidate = intersects &&
-                (widthRatio >= 0.5 || heightRatio >= 0.35 || areaRatio >= 0.2);
+            var isBackgroundCandidate = widthRatio >= 0.9 ||
+                heightRatio >= 0.9 ||
+                areaRatio >= 0.7;
 
             if (isBackgroundCandidate)
             {
@@ -1377,24 +1371,6 @@ public class HtmlPageService : IHtmlPageService
         }
 
         return (background, flow);
-    }
-
-    private static bool RectanglesIntersect(HtmlImageBlock image, HtmlTextBlock text)
-    {
-        var imgLeft = image.X;
-        var imgRight = image.X + image.Cx;
-        var imgTop = image.Y;
-        var imgBottom = image.Y + image.Cy;
-
-        var textLeft = text.X;
-        var textRight = text.X + text.Cx;
-        var textTop = text.Y;
-        var textBottom = text.Y + text.Cy;
-
-        return imgLeft < textRight &&
-               imgRight > textLeft &&
-               imgTop < textBottom &&
-               imgBottom > textTop;
     }
 
     private static string BuildBackgroundImagesHtml(

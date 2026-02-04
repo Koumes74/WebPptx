@@ -204,7 +204,7 @@ public class PptxController : ControllerBase
     }
 
     [HttpPost("htmlpage")]
-    [ProducesResponseType(typeof(HtmlPageResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(HtmlPageBatchResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status500InternalServerError)]
@@ -212,8 +212,27 @@ public class PptxController : ControllerBase
     {
         try
         {
-            var result = htmlPageService.Export(request);
-            return Ok(result);
+            var requestedPaths = GetHtmlPageRequestedPaths(request);
+            var items = new List<HtmlPageItemResult>();
+
+            foreach (var path in requestedPaths)
+            {
+                try
+                {
+                    var perRequest = request with { Path = path };
+                    var result = htmlPageService.Export(perRequest);
+                    items.Add(new HtmlPageItemResult(path, true, null, result));
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "HTML page export failed for {Path}", path);
+                    items.Add(new HtmlPageItemResult(path, false, ex.Message, null));
+                }
+            }
+
+            var succeeded = items.Count(item => item.Success);
+            var failed = items.Count - succeeded;
+            return Ok(new HtmlPageBatchResponse(items.Count, succeeded, failed, items));
         }
         catch (ArgumentException ex)
         {
@@ -228,6 +247,40 @@ public class PptxController : ControllerBase
             _logger.LogError(ex, "HTML page export failed.");
             return Problem(title: "HTML page export failed", detail: ex.Message, statusCode: StatusCodes.Status500InternalServerError);
         }
+    }
+
+    private static List<string> GetHtmlPageRequestedPaths(HtmlPageRequest request)
+    {
+        if (request is null)
+        {
+            throw new ArgumentException("Body is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Path))
+        {
+            throw new ArgumentException("Path must be a directory.");
+        }
+
+        var directory = Path.GetFullPath(request.Path.Trim());
+        if (System.IO.File.Exists(directory))
+        {
+            throw new ArgumentException($"Path must be a directory, not a file: {directory}");
+        }
+
+        if (!Directory.Exists(directory))
+        {
+            throw new ArgumentException($"Directory not found: {directory}");
+        }
+
+        var paths = Directory.EnumerateFiles(directory, "*.pptx", SearchOption.AllDirectories)
+            .ToList();
+
+        if (paths.Count == 0)
+        {
+            throw new FileNotFoundException("No .pptx files found in directory (including subdirectories).", directory);
+        }
+
+        return paths;
     }
 
     private static List<string> GetRequestedPaths(ExtractPptxRequest request)
@@ -1539,6 +1592,10 @@ public record HtmlPageResponse(
     int PageCount,
     int ImageCount,
     List<string> PageImages);
+
+public record HtmlPageItemResult(string InputPath, bool Success, string? Error, HtmlPageResponse? Result);
+
+public record HtmlPageBatchResponse(int RequestedCount, int SucceededCount, int FailedCount, List<HtmlPageItemResult> Items);
 
 public record HtmlPageOptions(
     string? SofficePath,
